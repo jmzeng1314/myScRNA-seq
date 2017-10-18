@@ -1,0 +1,340 @@
+---
+title: "比较不同的对单细胞转录组数据normalization方法"
+author: "jmzeng@163.com"
+date: "10/13/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 背景知识
+
+## CPM去除文库大小影响
+
+之所以需要normalization，就是因为测序的各个细胞样品的总量不一样，所以测序数据量不一样，就是文库大小不同，这个因素是肯定需要去除。最简单的就是counts per million (CPM)，所有样本的所有基因的表达量都乘以各自的文库reads总数再除以一百万即可。 代码如下：
+
+```{r,eval=F}
+calc_cpm <-
+function (expr_mat, spikes = NULL) 
+{
+    norm_factor <- colSums(expr_mat[-spikes, ])
+    return(t(t(expr_mat)/norm_factor)) * 10^6
+}
+```
+
+但是CPM方法有一个很严重的缺陷，那些高表达并且在细胞群体表达差异很大的基因会严重影响那些低表达基因。
+
+## RPKM, FPKM and TPM去除基因或者转录本长度影响
+
+最常见的是下面3个：
+
+* RPKM - Reads Per Kilobase Million (for single-end sequencing)
+* FPKM - Fragments Per Kilobase Million (same as RPKM but for paired-end sequencing, makes sure that paired ends mapped to the same fragment are not counted twice)
+* TPM - Transcripts Per Kilobase Million (same as RPKM, but the order of normalizations is reversed - length first and sequencing depth second)
+
+这些normalization方法并不适合单细胞转录组测序数据，因为scRNA-seq具有3端偏好性，一般是没办法测全长转录本的，所以转录本的长度跟表达量不是完全的成比例。
+
+对于这样的数据，需要重新转换成reads counts 才能做下游分析。
+
+## 适用于bulk RNA-seq的normalization方法
+
+比较流行的有：
+
+* DESeq的size factor (SF)，relative log expression(RLE)
+* upperquartile (UQ) 
+* weighted trimmed mean of M-values(TMM)
+
+这些适用于 bulk RNA-seq data 的normalization方法可能并不适合 single-cell RNA-seq data ，因为它们的基本假设是有问题的。
+
+## 特意为single-cell RNA-seq data 开发的normalization方法
+
+*  LSF (Lun Sum Factors)
+* scran package implements a variant on CPM specialized for single-cell data
+
+而scater包把这些normalization方法都包装到了normaliseExprs函数里面，可以直接调用。并且通过plotPCA函数来可视化这些normalization的好坏。
+
+# 工作环境
+
+需要安装并且加载一些包,安装代码如下；
+
+```{r,eval=FALSE} 
+## try http:// if https:// URLs are not supported
+source("https://bioconductor.org/biocLite.R") 
+biocLite("scater") 
+biocLite("scran") 
+install.packages("devtools")
+library("devtools") 
+install_github("hemberg-lab/scRNA.seq.funcs") 
+```
+
+加载代码如下：
+
+```{r,message=F}
+library(scRNA.seq.funcs)
+library(scater)
+library(scran)
+set.seed(1234567)
+```
+
+# 加载测试数据
+
+
+这里选取的是芝加哥大学Yoav Gilad lab实验的Tung et al 2017的单细胞测序文章的数据
+
+```{r}
+
+options(stringsAsFactors = FALSE)
+set.seed(1234567)
+## 这里直接读取过滤好的数据，是一个SCESet对象，适用于scater包的
+umi <- readRDS("../tung/umi.rds")
+
+## 如果没有这个rds对象，就自己把read counts的表达矩阵读进去，变成这个适用于scater包的SCESet对象，代码如下；
+if(F){
+      # 这个文件是表达矩阵，包括线粒体基因和 ERCC spike-ins 的表达量，可以用来做质控
+    molecules <- read.table("tung/molecules.txt", sep = "\t")
+    ## 这个文件是表达矩阵涉及到的所有样本的描述信息，包括样本来源于哪个细胞，以及哪个批次。
+    anno <- read.table("tung/annotation.txt", sep = "\t", header = TRUE)
+    pheno_data <- new("AnnotatedDataFrame", anno)
+    rownames(pheno_data) <- pheno_data$sample_id
+    dat <- scater::newSCESet(
+      countData = molecules,
+      phenoData = pheno_data
+    )
+    set_exprs(dat, "log2_counts") <- log2(counts(dat) + 1)
+
+}
+
+umi.qc <- umi[fData(umi)$use, pData(umi)$use] 
+## counts(umi) 和  exprs(umi) 这里是不一样的。
+## 前面的过滤信息，这里直接用就好了。
+endog_genes <- !fData(umi.qc)$is_feature_control
+dim(exprs( umi.qc[endog_genes, ]))
+## 可以看到是过滤后的654个单细胞的13997个基因的表达矩阵。
+umi.qc
+
+```
+
+
+# 实践
+
+## Raw
+
+先看看原始的表达值的分布情况，这里本来应该是对每一个样本画boxplot的，但是这里的样本数量太多了，这样的可视化效果很差， 就用PCA的方式，看看这表达矩阵是否可以把样本区分开，只有那些区分度非常好的normalization方法才是最优的。不过scater包提供了一个plotRLE函数，可以画出类似于样本boxplot的效果。
+
+```{r}
+plotPCA(
+    umi.qc[endog_genes, ],
+    colour_by = "batch",
+    size_by = "total_features",
+    shape_by = "individual",
+    exprs_values = "log2_counts"
+)
+```
+
+## CPM
+
+scater默认对表达矩阵做了cpm转换，所以可以直接提取里面的信息
+
+```{r}
+plotPCA(
+    umi.qc[endog_genes, ],
+    colour_by = "batch",
+    size_by = "total_features",
+    shape_by = "individual",
+    exprs_values = "exprs"
+)
+```
+
+还可以看看CPM和原始的log转换的表达矩阵的区别
+
+```{r}
+plotRLE(
+    umi.qc[endog_genes, ], 
+    exprs_mats = list(Raw = "log2_counts", CPM = "exprs"),
+    exprs_logged = c(TRUE, TRUE),
+    colour_by = "batch"
+)
+```
+
+## TMM 
+
+需要用函数 normaliseExprs 来对SCESet对象里面的表达矩阵做TMM转换，
+
+```{r}
+umi.qc <- normaliseExprs(
+    umi.qc,
+    method = "TMM",
+    feature_set = endog_genes
+)
+plotPCA(
+    umi.qc[endog_genes, ],
+    colour_by = "batch",
+    size_by = "total_features",
+    shape_by = "individual",
+    exprs_values = "norm_exprs"
+)
+```
+
+这次的转换会以norm_exprs的属性存储在里面，同时增加了一个norm_cpm属性。
+ 
+
+```{r}
+plotRLE(
+    umi.qc[endog_genes, ], 
+    exprs_mats = list(Raw = "log2_counts", TMM = "norm_exprs"),
+    exprs_logged = c(TRUE, TRUE),
+    colour_by = "batch"
+)
+
+```
+
+# 观察变化规律
+
+到这里为止，表达矩阵已经有了 counts, exprs, log2_counts, norm_cpm, norm_exprs 这些形式。
+ 
+```{r}
+## 最开始读入是 基于read counts的表达矩阵
+counts(umi.qc)[1:10,1:3]
+
+## 默认的CPM转换后的矩阵
+exprs(umi.qc)[1:10,1:3]
+
+## 通过set_exprs进行简单的对数转换后的表达矩阵。
+log2(counts(umi.qc) + 1)[1:10,1:3]
+
+
+## 通过normaliseExprs函数指定 TMM 转换
+norm_exprs(umi.qc)[1:10,1:3]
+
+## 对TMM转换后，再进行cpm转换的表达矩阵。
+norm_cpm(umi.qc)[1:10,1:3]
+
+
+# PS: 记住，这个时候是没有norm_counts(umi.qc) 函数的。
+```
+
+# scran 
+
+这个scran package implements a variant on CPM specialized for single-cell data，所以需要特殊的代码
+
+```{r}
+qclust <- quickCluster(umi.qc, min.size = 30)
+umi.qc <- computeSumFactors(umi.qc, sizes = 15, clusters = qclust)
+umi.qc <- normalize(umi.qc)
+plotPCA(
+    umi.qc[endog_genes, ],
+    colour_by = "batch",
+    size_by = "total_features",
+    shape_by = "individual",
+    exprs_values = "exprs"
+)
+```
+
+也可以比较它相当于最粗糙的对数转换，效果好在哪里。
+
+```{r}
+plotRLE(
+    umi.qc[endog_genes, ], 
+    exprs_mats = list(Raw = "log2_counts", scran = "exprs"),
+    exprs_logged = c(TRUE, TRUE),
+    colour_by = "batch"
+)
+```
+
+# Size-factor (RLE)
+
+这个normalization方法最初是DEseq包提出来的。
+
+```{r}
+umi.qc <- normaliseExprs(
+    umi.qc,
+    method = "RLE", 
+    feature_set = endog_genes
+)
+plotPCA(
+    umi.qc[endog_genes, ],
+    colour_by = "batch",
+    size_by = "total_features",
+    shape_by = "individual",
+    exprs_values = "norm_exprs"
+)
+```
+
+# Upperquantile
+
+```{r}
+umi.qc <- normaliseExprs(
+    umi.qc,
+    method = "upperquartile", 
+    feature_set = endog_genes,
+    p = 0.99
+)
+plotPCA(
+    umi.qc[endog_genes, ],
+    colour_by = "batch",
+    size_by = "total_features",
+    shape_by = "individual",
+    exprs_values = "norm_exprs"
+)
+```
+
+# Downsampling
+
+最后要介绍的这个去除文库大小差异的方法是从大的文库样本里面随机抽取部分reads使之文库大小缩减到跟其它文库一致。它的优点是抽样过程中会造成一些基因表达量为0，这样人为创造了dropout情况，弥补了系统误差。但是有个很重要的缺点，就是每次抽样都是随机的，这样结果无法重复，一般需要多次抽样保证结果的鲁棒性。  
+
+抽样函数如下：
+
+```{r}
+Down_Sample_Matrix <-
+function (expr_mat) 
+{
+    min_lib_size <- min(colSums(expr_mat))
+    down_sample <- function(x) {
+        prob <- min_lib_size/sum(x)
+        return(unlist(lapply(x, function(y) {
+            rbinom(1, y, prob)
+        })))
+    }
+    down_sampled_mat <- apply(expr_mat, 2, down_sample)
+    return(down_sampled_mat)
+}
+
+
+```
+
+
+## 抽样后的counts矩阵赋值给SCESet对象的新的属性。
+
+```{r}
+norm_counts(umi.qc) <- log2(Down_Sample_Matrix(counts(umi.qc)) + 1)
+plotPCA(
+    umi.qc[endog_genes, ],
+    colour_by = "batch",
+    size_by = "total_features",
+    shape_by = "individual",
+    exprs_values = "norm_counts"
+)
+umi.qc
+```
+
+同样的，也可视化一下表达矩阵，看看这个normalization的效果如何。
+
+```{r}
+plotRLE(
+    umi.qc[endog_genes, ], 
+    exprs_mats = list(Raw = "log2_counts", DownSample = "norm_counts"),
+    exprs_logged = c(TRUE, TRUE),
+    colour_by = "batch"
+)
+```
+
+
+
+
+
+
+
+
+
