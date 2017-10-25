@@ -9,7 +9,7 @@ source('https://bioconductor.org/biocLite.R')
 
 install.packages("pheatmap")
 biocLite("limma")
-biocLite("scater") # scater用于自动化异常值检测
+biocLite("scater",suppressUpdates=T) # scater用于自动化异常值检测
 biocLite("RUVSeq",suppressUpdates=T)
 biocLite("pcaMethods",suppressUpdates=T)
 biocLite("SC3",suppressUpdates=T)
