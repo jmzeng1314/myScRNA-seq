@@ -18,12 +18,12 @@ biocLite("TSCAN",suppressUpdates=T)
 biocLite("monocle",suppressUpdates=T)
 biocLite("destiny",suppressUpdates=T)
 
-biocLite("edgeR")
-biocLite("DESeq2")
-biocLite("MAST")
-biocLite("SummarizedExperiment")
-biocLite("MultiAssayExperiment")
-biocLite("scran")
+biocLite("edgeR",suppressUpdates=T)
+biocLite("DESeq2",suppressUpdates=T)
+biocLite("MAST",suppressUpdates=T)
+biocLite("SummarizedExperiment",suppressUpdates=T)
+biocLite("MultiAssayExperiment",suppressUpdates=T)
+biocLite("scran",suppressUpdates=T)
 
 
 
