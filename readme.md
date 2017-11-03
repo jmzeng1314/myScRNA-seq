@@ -197,3 +197,7 @@ todo
 
 todo
 
+#### step4: normalization方法大比拼
+
+todo
+
