@@ -1,0 +1,242 @@
+---
+title: "R包变化可真快"
+author: "jmzeng1314"
+date: "11/3/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+看起来单细胞转录组测序领域宣传的最广的就是这个 `scater` 包了，我刻意学了它全部两百多页的教程，也处理好了自己的项目数据，都准备发教程了。
+
+才过去一个星期，我想用之前的代码准备处理一下新的数据。
+
+发现它所有的代码均不可用了，底层逻辑就被改变了。就是 2017年 11 月之前的代码里面的函数，对象很多都被取消了。
+
+
+## 文档
+
+最新的文档如下：
+
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-intro.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-intro.R) | An introduction to the scater package    |
+| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-dataviz.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-dataviz.R) | Data visualisation methods in scater     |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-quantimport.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-quantimport.R) | Expression quantification and import     |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-qc.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-qc.R) | Quality control with scater              |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-transition.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-transition.R) | Transition from SCESet to SingleCellExperiment |
+| [PDF](http://bioconductor.org/packages/release/bioc/manuals/scater/man/scater.pdf) |                                          |                                          |
+
+而且其GitHub的教程也更新了：http://hemberg-lab.github.io/scRNA.seq.course/
+
+这里就不重复介绍他们以前的代码了，说多了都是泪啊！！！
+
+## 测试数据+对象
+
+```{r}
+suppressPackageStartupMessages(library(scater))
+data("sc_example_counts")
+data("sc_example_cell_info") 
+
+example_sce <- SingleCellExperiment(
+    assays = list(counts = sc_example_counts), colData = sc_example_cell_info)
+
+exprs(example_sce) <- log2(
+    calculateCPM(example_sce, use.size.factors = FALSE) + 1)
+
+keep_feature <- rowSums(exprs(example_sce) > 0) > 0
+example_sce <- example_sce[keep_feature,]
+
+example_sce <- calculateQCMetrics(example_sce, 
+                                  feature_controls = list(eg = 1:40))
+
+#scater_gui(example_sce)
+```
+
+但是真的非常好用，所有的可视化都集中在了 `scater_gui` 这个函数产生的`shiny`网页里面：
+
+- `plotScater`: a plot method exists for `SingleCellExperiment` objects, which gives an overview of expression across cells.
+- `plotQC`: various methods are available for producing QC diagnostic plots.
+- `plotPCA`: produce a principal components plot for the cells.
+- `plotTSNE`: produce a t-distributed stochastic neighbour embedding (reduced dimension) plot for the cells.
+- `plotDiffusionMap`: produce a diffusion map (reduced dimension) plot for the cells.
+- `plotMDS`: produce a multi-dimensional scaling plot for the cells.
+- `plotReducedDim`: plot a reduced-dimension representation of the cells.
+- `plotExpression`: plot expression levels for a defined set of features.
+- `plotPlatePosition`: plot cells in their position on a plate, coloured by cell metadata and QC metrics or feature expression level.
+- `plotColData`: plot cell metadata and QC metrics.
+- `plotRowData`: plot feature metadata and QC metrics.
+
+可以充分的探索自己的数据。
+
+## 可视化大全
+
+前面说到可以用 `shiny`网页来进行各种各样的可视化，其实也可以拆分开来。
+
+```{r} 
+library(ggplot2)
+theme_set(theme_bw(12))
+
+## ----plot-sceset-blocking, eval=TRUE---------------------------------------
+suppressPackageStartupMessages(library(scater))
+data("sc_example_counts")
+data("sc_example_cell_info")
+example_sce <- SingleCellExperiment(
+    assays = list(counts = sc_example_counts), colData = sc_example_cell_info)
+exprs(example_sce) <- log2(calculateCPM(example_sce, 
+                                        use.size.factors = FALSE) + 1)
+
+plotScater(example_sce, block1 = "Mutation_Status", block2 = "Treatment",
+     colour_by = "Cell_Cycle", nfeatures = 300, exprs_values = "counts")
+
+## ----plot-expression, eval=TRUE--------------------------------------------
+plotExpression(example_sce, rownames(example_sce)[1:6],
+               x = "Mutation_Status", exprs_values = "exprs", 
+               colour = "Treatment")
+
+## ----plot-expression-theme-bw, eval=TRUE-----------------------------------
+plotExpression(example_sce, rownames(example_sce)[7:12],
+               x = "Mutation_Status", exprs_values = "counts", 
+               colour = "Cell_Cycle",
+               show_median = TRUE, show_violin = FALSE,  xlab = "Mutation Status",
+               log = TRUE)
+
+## ----plot-pdata, echo=TRUE, fig.show=TRUE, results='hide', eval=TRUE-------
+example_sce <- calculateQCMetrics(example_sce, 
+                                  feature_controls = list(dummy = 1:40))
+plotColData(example_sce, aes(x = total_counts, y = total_features,
+                                  colour = Mutation_Status))
+
+## ----plot-pdatacol-gene-exprs-2, fig.show = TRUE, eval=TRUE----------------
+plotColData(example_sce, aes(x = pct_counts_feature_control,
+                                  y = total_features, colour = Gene_0500))
+
+## ----plot-fdata, echo=TRUE, fig.show=TRUE, results='hide', eval=TRUE-------
+plotRowData(example_sce, aes(x = log10_total_counts, y = n_cells_counts,
+                                  colour = log10_mean_counts))
+
+## ----plot-pca-4comp-colby-shapeby-save-pcs, fig.show = FALSE, eval=TRUE----
+example_sce <- plotPCA(example_sce, ncomponents = 4,
+                          colour_by = "Treatment", shape_by = "Mutation_Status",
+                          return_SCE = TRUE, theme_size = 12)
+reducedDims(example_sce)
+head(reducedDim(example_sce))
+
+## ----plot-reduceddim-4comp-colby-shapeby, fig.show=FALSE, eval=TRUE--------
+plotReducedDim(example_sce, use_dimred = "PCA", ncomponents = 4, 
+               colour_by = "Treatment", shape_by = "Mutation_Status")
+
+## ----plot-reduceddim-4comp-colby-sizeby-exprs, fig.show = FALSE, eval=TRUE----
+plotReducedDim(example_sce, use_dimred = "PCA", ncomponents = 4, 
+               colour_by = "Gene_1000", size_by = "Gene_0500")
+
+## ----plot-pca-default, eval=TRUE-------------------------------------------
+plotPCA(example_sce)
+
+## ----plot-pca-cpm, eval=TRUE-----------------------------------------------
+plotPCA(example_sce, exprs_values = "cpm")
+
+## ----plot-pca-feature-controls, fig.show = FALSE, eval=TRUE----------------
+plotPCA(example_sce, feature_set = fData(example_sce)$is_feature_control)
+
+## ----plot-pca-4comp-colby-shapeby, fig.height=5.5, eval=TRUE---------------
+plotPCA(example_sce, ncomponents = 4, colour_by = "Treatment",
+        shape_by = "Mutation_Status")
+
+## ----plot-pca-4comp-colby-sizeby-exprs, fig.height=5.5, eval=TRUE----------
+plotPCA(example_sce, colour_by = "Gene_0001", size_by = "Gene_1000")
+
+## ----plot-tsne-1comp-colby-sizeby-exprs, fig.height=5.5, eval=TRUE---------
+plotTSNE(example_sce, colour_by = "Gene_0001", size_by = "Gene_1000")
+
+## ----plot-difmap-1comp-colby-sizeby-exprs, fig.height=5.5, eval=TRUE-------
+plotDiffusionMap(example_sce, colour_by = "Gene_0001", size_by = "Gene_1000")
+
+```
+
+## 详细的QC
+
+做QC要结合上面的可视化步骤，所有没办法自动化，只能先可视化，肉眼分辨一下哪些样本或者基因数据是需要舍弃的。
+
+```{r}
+library(knitr)
+opts_chunk$set(fig.align = 'center', fig.width = 6, fig.height = 5, dev = 'png')
+library(ggplot2)
+theme_set(theme_bw(12))
+
+## ----quickstart-load-data, message=FALSE, warning=FALSE--------------------
+suppressPackageStartupMessages(library(scater))
+data("sc_example_counts")
+data("sc_example_cell_info")
+
+## ----quickstart-make-sce, results='hide'-----------------------------------
+gene_df <- DataFrame(Gene = rownames(sc_example_counts))
+rownames(gene_df) <- gene_df$Gene
+example_sce <- SingleCellExperiment(assays = list(counts = sc_example_counts), 
+                                    colData = sc_example_cell_info, 
+                                    rowData = gene_df)
+
+example_sce <- normalise(example_sce)
+
+## ----quickstart-add-exprs, results='hide'----------------------------------
+exprs(example_sce) <- log2(
+    calculateCPM(example_sce, use.size.factors = FALSE) + 1)
+
+## ----filter-no-exprs-------------------------------------------------------
+keep_feature <- rowSums(exprs(example_sce) > 0) > 0
+example_sce <- example_sce[keep_feature,]
+
+example_sceset <- calculateQCMetrics(example_sce, feature_controls = list(eg = 1:40)) 
+ 
+
+colnames(colData(example_sceset))
+colnames(rowData(example_sceset))
+```
+
+首先是基于样本的过滤，用 `colData(object)` 可以查看各个样本统计情况 
+
+- `total_counts`: total number of counts for the cell (aka ‘library size’)
+
+- `log10_total_counts`: total_counts on the log10-scale
+
+- `total_features`: the number of features for the cell that have expression above the detection limit (default detection limit is zero)
+
+- `filter_on_total_counts`: would this cell be filtered out based on its log10-total_counts being (by default) more than 5 median absolute deviations from the median log10-total_counts for the dataset?
+
+- `filter_on_total_features`: would this cell be filtered out based on its total_features being (by default) more than 5 median absolute deviations from the median total_features for the dataset?
+
+- `counts_feature_controls`: total number of counts for the cell that come from (a set of user-defined) control features. Defaults to zero if no control features are indicated.
+
+- `counts_endogenous_features`: total number of counts for the cell that come from endogenous features (i.e. not control features). Defaults to `total_counts` if no control features are indicated.
+
+- `log10_counts_feature_controls`: total number of counts from control features on the log10-scale. Defaults to zero (i.e. log10(0 + 1), offset to avoid infinite values) if no control features are indicated.
+
+- `log10_counts_endogenous_features`: total number of counts from endogenous features on the log10-scale. Defaults to zero (i.e. log10(0 + 1), offset to avoid infinite values) if no control features are indicated.
+
+- `n_detected_feature_controls`: number of defined feature controls that have expression greater than the threshold defined in the object. *`pct_counts_feature_controls`: percentage of all counts that come from the defined control features. Defaults to zero if no control features are defined.
+
+
+然后是基于基因的过滤，用 `rowData(object)` 可以查看各个基因统计情况
+
+- `mean_exprs`: the mean expression level of the gene/feature.
+- `exprs_rank`: the rank of the feature’s expression level in the cell.
+- `total_feature_counts`: the total number of counts mapped to that feature across all cells.
+- `log10_total_feature_counts`: total feature counts on the log10-scale.
+- `pct_total_counts`: the percentage of all counts that are accounted for by the counts mapping to the feature.
+- `is_feature_control`: is the feature a control feature? Default is `FALSE` unless control features are defined by the user.
+- `n_cells_exprs`: the number of cells for which the expression level of the feature is above the detection limit (default detection limit is zero).
+
+
+还有更详细的教程，需要看
+
+- https://www.bioconductor.org/help/workflows/simpleSingleCell/
+- http://hemberg-lab.github.io/scRNA.seq.course/index.html 
+
+```{r}
+sessionInfo()
+```
+
+
+

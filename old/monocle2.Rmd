@@ -1,0 +1,406 @@
+---
+title: "monocle2使用记录"
+author: "jmzeng@163.com"
+date: "10/9/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+ 
+# 初识monocle
+
+monocle在bioconductor官网的主页给出了比较详尽的测试数据的示例代码：
+
+- [PDF](https://bioconductor.org/packages/release/bioc/vignettes/monocle/inst/doc/monocle-vignette.pdf)
+
+- [R Script](https://bioconductor.org/packages/release/bioc/vignettes/monocle/inst/doc/monocle-vignette.R)
+
+基本上花上几个小时运行该例子，一步步理解输入输出，就可以学会使用。当然，要看懂算法就比较费劲了，需要仔细读paper。
+
+
+## 安装并且加载包和测试数据
+如果还没安装，就运行：
+```{r,eval=F}
+source("http://bioconductor.org/biocLite.R")
+biocLite()
+biocLite("monocle")
+biocLite("HSMMSingleCell")
+```
+如果已经安装，请直接加载
+```{r,message=F,warning=F}
+library(Biobase)
+library(knitr)
+library(reshape2)
+library(ggplot2)
+
+library(HSMMSingleCell)
+library(monocle)
+data(HSMM_expr_matrix) ## RPKM 矩阵,271个细胞，47192个基因
+data(HSMM_gene_annotation)
+data(HSMM_sample_sheet)
+
+HSMM_expr_matrix[1:10,1:5] 
+head(HSMM_gene_annotation)
+head(HSMM_sample_sheet)
+```
+
+这个数据来自于paper：[The dynamics and regulators of cell fate decisions are revealed by pseudotemporal ordering of single cells](http://www.nature.com/nbt/journal/v32/n4/full/nbt.2859.html?message-global=remove). 作者发布monocle这个R包的同时也测了这些数据，在GEO: [GSE52529](http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE52529)
+
+ We expanded primary human skeletal muscle myoblasts (HSMM) under high-mitogen conditions (GM) and induced differentiation by switching to low-serum medium (DM). We captured between 49 and 77 cells at each of four time points after the switch to DM using the Fluidigm C1 microfluidic system. 
+ 
+
+## 构建S4对象，CellDataSet
+
+主要是读取表达矩阵和样本描述信息，这里介绍两种方式，一种是读取基于 subjunc+featureCounts 分析后的reads counts矩阵，一种是读取 tophat+cufflinks 得到的RPKM表达矩阵。
+
+### 读取上游分析的输出文件
+
+```{r s4-tung-data, cache=TRUE,message=F,warning=F}
+library(monocle)
+library(scater, quietly = TRUE)
+library(knitr)
+options(stringsAsFactors = FALSE)
+
+# 这个文件是表达矩阵，包括线粒体基因和 ERCC spike-ins 的表达量，可以用来做质控
+molecules <- read.table("tung/molecules.txt", sep = "\t")
+
+## 这个文件是表达矩阵涉及到的所有样本的描述信息，包括样本来源于哪个细胞，以及哪个批次。
+anno <- read.table("tung/annotation.txt", sep = "\t", header = TRUE)
+rownames(anno)=colnames(molecules)
+library(org.Hs.eg.db)
+eg2symbol=toTable(org.Hs.egSYMBOL)
+eg2ensembl=toTable(org.Hs.egENSEMBL)
+egid=eg2ensembl[ match(rownames(molecules),eg2ensembl$ensembl_id),'gene_id']
+symbol=eg2symbol[match( egid ,eg2symbol$gene_id),'symbol']
+gene_annotation = data.frame(ensembl=rownames(molecules),
+                             gene_short_name=symbol,
+                             egid=egid)
+rownames(gene_annotation)=rownames(molecules)
+
+pd <- new("AnnotatedDataFrame", data = anno)
+fd <- new("AnnotatedDataFrame", data = gene_annotation)
+#tung <- newCellDataSet(as.matrix(molecules), phenoData = pd, featureData = fd)
+tung <- newCellDataSet(as(as.matrix(molecules), "sparseMatrix"),
+                       phenoData = pd, 
+                       featureData = fd,
+                       lowerDetectionLimit=0.5,
+                       expressionFamily=negbinomial.size())
+
+tung
+```
+
+可以看到  对象已经构造成功，是一个包含了  ``19027 features, 864 samples `` 的表达矩阵，需要进行一系列的过滤之后，拿到高质量的单细胞转录组数据进行下游分析。
+
+这些样本来源于3个不同的人，每个人有3个批次的单细胞，每个批次单细胞都是96个。
+
+### 或者使用内置数据个构建S4对象
+
+```{r s4-HSMM-data, cache=TRUE,message=F,warning=F}
+pd <- new("AnnotatedDataFrame", data = HSMM_sample_sheet)
+fd <- new("AnnotatedDataFrame", data = HSMM_gene_annotation)
+
+# First create a CellDataSet from the relative expression levels
+
+## 这里仅仅是针对rpkm表达矩阵的读取
+HSMM <- newCellDataSet(as.matrix(HSMM_expr_matrix),   
+                       phenoData = pd, 
+                       featureData = fd,
+                       lowerDetectionLimit=0.1,
+                       expressionFamily=tobit(Lower=0.1))
+
+# Next, use it to estimate RNA counts
+rpc_matrix <- relative2abs(HSMM)
+rpc_matrix[1:10,1:5] 
+## rpkm格式的表达值需要转换成reads counts之后才可以进行下游分析！
+
+# Now, make a new CellDataSet using the RNA counts
+HSMM <- newCellDataSet(as(as.matrix(rpc_matrix), "sparseMatrix"),
+                       phenoData = pd, 
+                       featureData = fd,
+                       lowerDetectionLimit=0.5,
+                       expressionFamily=negbinomial.size())
+
+```
+
+下面的分析，都基于内置数据构建的S4对象，HSMM
+
+## 过滤低质量细胞和未检测到的基因
+
+### 基于基因的过滤
+
+这里只是把 基因挑选出来，并没有对S4对象进行过滤操作。 这个  detectGenes 函数还计算了 每个细胞里面表达的基因数量。
+
+```{r}
+HSMM <- estimateSizeFactors(HSMM)
+HSMM <- estimateDispersions(HSMM)
+
+HSMM <- detectGenes(HSMM, min_expr = 0.1)
+print(head(fData(HSMM)))
+## 对每个基因都检查一下在多少个细胞里面是有表达量的。
+## 只留下至少在10个细胞里面有表达量的那些基因，做后续分析
+expressed_genes <- row.names(subset(fData(HSMM), num_cells_expressed >= 10))
+length(expressed_genes) ## 只剩下了14224个基因
+print(head(pData(HSMM))) 
+
+
+```
+
+
+### 基于样本表达量进行过滤
+
+这里选择的是通过不同时间点取样的细胞来进行分组查看，把 超过2个sd 的那些样本的临界值挑选出来，下一步过滤的时候使用。
+
+```{r} 
+
+pData(HSMM)$Total_mRNAs <- Matrix::colSums(exprs(HSMM))
+
+HSMM <- HSMM[,pData(HSMM)$Total_mRNAs < 1e6]
+
+upper_bound <- 10^(mean(log10(pData(HSMM)$Total_mRNAs)) +
+                     2*sd(log10(pData(HSMM)$Total_mRNAs)))
+lower_bound <- 10^(mean(log10(pData(HSMM)$Total_mRNAs)) -
+                     2*sd(log10(pData(HSMM)$Total_mRNAs)))
+table(pData(HSMM)$Hours)
+qplot(Total_mRNAs, data = pData(HSMM), color = Hours, geom = "density") +
+  geom_vline(xintercept = lower_bound) +
+  geom_vline(xintercept = upper_bound)
+ 
+```
+ 
+
+### 执行过滤并可视化检查一下
+
+上面已经根据基因表达情况以及样本的总测序数据选择好了阈值，下面就可以可视化并且对比检验一下执行过滤与否的区别。
+
+```{r,eval=F}
+HSMM <- HSMM[,pData(HSMM)$Total_mRNAs > lower_bound & 
+               pData(HSMM)$Total_mRNAs < upper_bound]								  
+HSMM <- detectGenes(HSMM, min_expr = 0.1)
+ 
+L <- log(exprs(HSMM[expressed_genes,]))
+ 
+melted_dens_df <- melt(Matrix::t(scale(Matrix::t(L))))
+ 
+qplot(value, geom="density", data=melted_dens_df) +  stat_function(fun = dnorm, size=0.5, color='red') + 
+  xlab("Standardized log(FPKM)") +
+  ylab("Density")
+
+```
+
+# 聚类
+ 
+## 根据指定基因对单细胞转录组表达矩阵进行分类
+
+下面这个代码只适用于这个测试数据， 主要是生物学背景知识，用MYF5基因和ANPEP基因来对细胞进行分类，可以区分Myoblast和Fibroblast。如果是自己的数据，建议多读读paper看看如何选取合适的基因，或者干脆跳过这个代码。
+
+```{r} 
+## 根据基因名字找到其在表达矩阵的ID，这里是ENSEMBL数据库的ID
+MYF5_id <- row.names(subset(fData(HSMM), gene_short_name == "MYF5"))
+ANPEP_id <- row.names(subset(fData(HSMM), gene_short_name == "ANPEP"))
+## 这里选取的基因取决于自己的单细胞实验设计
+cth <- newCellTypeHierarchy()
+
+cth <- addCellType(cth, "Myoblast", classify_func = function(x) { x[MYF5_id,] >= 1 })
+cth <- addCellType(cth, "Fibroblast", classify_func = function(x)
+{ x[MYF5_id,] < 1 & x[ANPEP_id,] > 1 })
+
+HSMM <- classifyCells(HSMM, cth, 0.1)
+## 这个时候的HSMM已经被改变了，增加了属性。
+
+table(pData(HSMM)$CellType)
+pie <- ggplot(pData(HSMM), aes(x = factor(1), fill = factor(CellType))) +
+  geom_bar(width = 1)
+pie + coord_polar(theta = "y") +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+
+```
+
+可以看到还有很大一部分细胞仅仅是根据这两个基因的表达量是无法成功的归类的。这个是很正常的，因为单细胞转录组测序里面的mRNA捕获率不够好。
+通过这个步骤成功的给HSMM这个S4对象增加了一个属性，就是CellType，在下面的分析中会用得着。
+
+## 无监督聚类
+
+这里需要安装最新版R包才可以使用里面的一些函数，因为上面的步骤基于指定基因的表达量进行细胞分组会漏掉很多信息，所以需要更好的聚类方式。
+
+```{r tSNE-data, cache=TRUE,message=F,warning=F}
+
+disp_table <- dispersionTable(HSMM)
+head(disp_table)
+## 只有满足 条件的10198个基因才能进入聚类分析
+unsup_clustering_genes <- subset(disp_table, mean_expression >= 0.1)
+
+HSMM <- setOrderingFilter(HSMM, unsup_clustering_genes$gene_id)
+plot_ordering_genes(HSMM)
+## 这里看看基因的表达量和基因的变异度之间的关系
+## 处在灰色阴影区域的基因会被抛弃掉，不进入聚类分析。
+
+plot_pc_variance_explained(HSMM, return_all = F) # norm_method = 'log',
+HSMM <- reduceDimension(HSMM, max_components=2, num_dim = 6, 
+                        reduction_method = 'tSNE', verbose = T) 
+HSMM <- clusterCells(HSMM, num_clusters=2)
+## 这里先用tSNE的聚类方法处理HSMM数据集，并可视化展示
+plot_cell_clusters(HSMM, 1, 2, color="CellType", markers=c("MYF5", "ANPEP"))
+## 可以看到并不能把细胞类型完全区分开，这个是完全有可能的，因为虽然是同一种细胞，但是有着不同的培养条件。
+head(pData(HSMM))
+head(fData(HSMM))
+
+## 所以这里也区分一下 培养基， a high-mitogen growth medium (GM) to a low-mitogen differentiation medium (DM). 
+plot_cell_clusters(HSMM, 1, 2, color="Media")
+
+
+## 因为我们假设就2种细胞类型，所以在做聚类的时候可以把这个参数添加进去，这样可以去除无关变量的干扰。
+HSMM <- reduceDimension(HSMM, max_components=2, num_dim = 2, reduction_method = 'tSNE', 
+                        residualModelFormulaStr="~Media + num_genes_expressed", verbose = T) #
+HSMM <- clusterCells(HSMM, num_clusters=2)
+plot_cell_clusters(HSMM, 1, 2, color="CellType") 
+plot_cell_clusters(HSMM, 1, 2, color="Cluster") + facet_wrap(~CellType)
+```
+
+## 半监督聚类
+
+```{r markerDiffTable-data, cache=TRUE,message=F,warning=F}
+## 这里的差异分析非常耗时
+
+marker_diff <- markerDiffTable(HSMM[expressed_genes,], 
+                               cth, 
+                               residualModelFormulaStr="~Media + num_genes_expressed",
+                               cores=1)
+head(marker_diff)
+
+## 就是对每个基因增加了pval和qval两列信息，挑选出那些在不同media培养条件下显著差异表达的基因，310个，
+candidate_clustering_genes <- row.names(subset(marker_diff, qval < 0.01))
+
+## 计算这310个基因在不同的celltype的specificity值
+marker_spec <- calculateMarkerSpecificity(HSMM[candidate_clustering_genes,], cth)
+head(selectTopMarkers(marker_spec, 3)) 
+ 
+semisup_clustering_genes <- unique(selectTopMarkers(marker_spec, 500)$gene_id)
+HSMM <- setOrderingFilter(HSMM, semisup_clustering_genes)
+plot_ordering_genes(HSMM)
+## 重新挑选基因，只用黑色高亮的基因来进行聚类。
+
+plot_pc_variance_explained(HSMM, return_all = F) # norm_method = 'log',
+
+HSMM <- reduceDimension(HSMM, max_components=2, num_dim = 2, reduction_method = 'tSNE', 
+                        residualModelFormulaStr="~Media + num_genes_expressed", verbose = T) 
+HSMM <- clusterCells(HSMM, num_clusters=2) 
+
+plot_cell_clusters(HSMM, 1, 2, color="CellType")
+
+HSMM <- clusterCells(HSMM,
+                     num_clusters=2, 
+                     frequency_thresh=0.1,
+                     cell_type_hierarchy=cth)
+plot_cell_clusters(HSMM, 1, 2, color="CellType", markers = c("MYF5", "ANPEP"))
+ 
+pie <- ggplot(pData(HSMM), aes(x = factor(1), fill = factor(CellType))) +
+  geom_bar(width = 1)
+pie + coord_polar(theta = "y") + 
+  theme(axis.title.x=element_blank(), axis.title.y=element_blank())
+
+```
+
+
+# Pseudotime分析
+
+主要目的是：Constructing Single Cell Trajectories
+
+发育过程中细胞状态是不断变化的，monocle包利用算法学习所有基因的表达模式来把每个细胞安排到各各自的发展轨迹。
+在大多数生物学过程中，参与的细胞通常不是同步发展的，只有单细胞转录组技术才能把处于该过程中各个中间状态的细胞分离开来，而monocle包里面的pseudotime分析方法正是要探究这些。
+
+- choose genes that define a cell's progress
+- reduce data dimensionality 
+- order cells along the trajectory
+
+其中第一个步骤挑选合适的基因有3种策略，分别是：
+
+- Ordering based on genes that differ between clusters
+- Selecting genes with high dispersion across cells
+- Ordering cells using known marker genes
+
+## 无监督的Pseudotime分析
+
+```{r,warning=F}
+HSMM_myo <- HSMM[,pData(HSMM)$CellType == "Myoblast"]	
+HSMM_myo <- estimateDispersions(HSMM_myo)
+
+## 策略1：  Ordering based on genes that differ between clusters
+if(F){
+  diff_test_res <- differentialGeneTest(HSMM_myo[expressed_genes,],
+                                      fullModelFormulaStr="~Media")
+ordering_genes <- row.names (subset(diff_test_res, qval < 0.01))
+}
+## 策略2：Selecting genes with high dispersion across cells
+disp_table <- dispersionTable(HSMM_myo)
+ordering_genes <- subset(disp_table, 
+                         mean_expression >= 0.5 & 
+                           dispersion_empirical >= 1 * dispersion_fit)$gene_id
+ 
+HSMM_myo <- setOrderingFilter(HSMM_myo, ordering_genes)
+plot_ordering_genes(HSMM_myo)
+## 挑选变异度大的基因，如图所示
+
+HSMM_myo <- reduceDimension(HSMM_myo, max_components=2)
+HSMM_myo <- orderCells(HSMM_myo)
+## 排序好的细胞可以直接按照发育顺序可视化
+plot_cell_trajectory(HSMM_myo, color_by="State")
+```
+
+# 直接做差异分析
+前面的聚类分析和Pseudotime分析都需要取基因子集，就已经利用过差异分析方法来挑选那些有着显著表达差异的基因。如果对所有的基因来检验，非常耗时。
+```{r}
+marker_genes <- row.names(subset(fData(HSMM_myo), 
+                                 gene_short_name %in% c("MEF2C", "MEF2D", "MYF5", 
+                                                        "ANPEP", "PDGFRA","MYOG", 
+                                                        "TPM1",  "TPM2",  "MYH2", 
+                                                        "MYH3",  "NCAM1", "TNNT1", 
+                                                        "TNNT2", "TNNC1", "CDK1", 
+                                                        "CDK2",  "CCNB1", "CCNB2", 
+                                                        "CCND1", "CCNA1", "ID1")))
+
+diff_test_res <- differentialGeneTest(HSMM_myo[marker_genes,], 
+                                      fullModelFormulaStr="~Media")
+# Select genes that are significant at an FDR < 10%
+sig_genes <- subset(diff_test_res, qval < 0.1)
+sig_genes[,c("gene_short_name", "pval", "qval")]
+## 可以看到挑选的都是显著差异表达的基因。
+```
+还可以挑选其中几个基因来可视化看看它们是如何在不同组差异表达的。这个画图函数自己都可以写。
+```{r}
+MYOG_ID1 <- HSMM_myo[row.names(subset(fData(HSMM_myo), 
+                                      gene_short_name %in% c("MYOG", "CCNB2"))),]
+plot_genes_jitter(MYOG_ID1, grouping="Media", ncol=2)
+```
+这样就可以测试某些基因，是否能区分细胞群体的不同类型及状态
+```{r}
+to_be_tested <- row.names(subset(fData(HSMM), 
+                                 gene_short_name %in% c("UBC", "NCAM1", "ANPEP"))) 
+cds_subset <- HSMM[to_be_tested,]
+ 
+diff_test_res <- differentialGeneTest(cds_subset, fullModelFormulaStr="~CellType")
+diff_test_res[,c("gene_short_name", "pval", "qval")] 
+
+plot_genes_jitter(cds_subset, grouping="CellType", color_by="CellType", 
+                  nrow=1, ncol=NULL, plot_trend=TRUE)
+ 
+full_model_fits <- fitModel(cds_subset, modelFormulaStr="~CellType")
+reduced_model_fits <- fitModel(cds_subset, modelFormulaStr="~1")
+diff_test_res <- compareModels(full_model_fits, reduced_model_fits)
+diff_test_res
+plot_genes_in_pseudotime(cds_subset, color_by="Hours")
+```
+
+
+
+# 算法
+
+- dpFeature: Selecting features from dense cell clusters
+- Reversed graph embedding
+- DRTree: Dimensionality Reduction via Learning a Tree
+- DDRTree: discriminative dimensionality reduction via learning a tree
+- Census: a normalization method to convert of single-cell mRNA transcript to relative transcript counts.
+- BEAM : to test for branch-dependent gene expression by formulating the problem as a contrast between two negative binomial GLMs.
+- Branch time point detection algorithm : 
+

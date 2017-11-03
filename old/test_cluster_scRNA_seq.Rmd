@@ -1,0 +1,230 @@
+---
+title: "比较不同的对单细胞转录组数据聚类的方法"
+author: "jmzeng@163.com"
+date: "10/12/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+ 
+# 背景介绍
+
+聚类之前必须要对表达矩阵进行normalization，而且要去除一些批次效应等外部因素。通过对表达矩阵的聚类，可以把细胞群体分成不同的状态，解释为什么会有不同的群体。不过从计算的角度来说，聚类还是蛮复杂的，各个细胞并没有预先标记好，而且也没办法事先知道可以聚多少类。尤其是在单细胞转录组数据里面有很高的噪音，基因非常多，意味着的维度很高。
+
+对这样的高维数据，需要首先进行降维，可以选择PCA或者t-SNE方法。聚类的话，一般都是无监督聚类方法，比如：hierarchical clustering, k-means clustering and graph-based clustering。算法略微有一点复杂，略过吧。
+
+这里主要比较6个常见的单细胞转录组数据的聚类包：
+
+-  [SINCERA](https://research.cchmc.org/pbge/sincera.html)
+
+-  [pcaReduce](https://github.com/JustinaZ/pcaReduce)
+
+-  [SC3](http://bioconductor.org/packages/SC3/)
+
+-  tSNE + k-means
+
+-  [SEURAT](https://github.com/satijalab/seurat)
+
+-  [SNN-Cliq](http://bioinfo.uncc.edu/SNNCliq/)
+ 
+ 
+ 所以需要安装并且加载一些包,安装代码如下；
+
+```{r,eval=FALSE}
+install.packages('pcaReduce')
+## try http:// if https:// URLs are not supported
+source("https://bioconductor.org/biocLite.R") 
+biocLite("SC3") 
+biocLite("Seurat") 
+install.packages("devtools")
+library("devtools")
+install_github("BPSC","nghiavtr") 
+install_github("hemberg-lab/scRNA.seq.funcs")
+devtools::install_github("JustinaZ/pcaReduce")
+```
+
+加载代码如下：
+
+```{r,message=F}
+library(pcaMethods)
+library(pcaReduce)
+library(SC3)
+library(scater)
+library(pheatmap)
+set.seed(1234567)
+```
+
+# 加载测试数据
+
+这里选取的是数据，加载了这个scater包的SCESet对象，包含着一个23730 features, 301 samples 的表达矩阵。
+
+供11已知的种细胞类型，这样聚类的时候就可以跟这个已知信息做对比，看看聚类效果如何。
+
+可以直接用plotPCA来简单PCA并且可视化。
+
+```{r}
+pollen <- readRDS("../pollen/pollen.rds")
+pollen
+head(fData(pollen))
+table(pData(pollen)$cell_type1)
+plotPCA(pollen, colour_by = "cell_type1")
+```
+
+可以看到简单的PCA也是可以区分部分细胞类型的，只不过在某些细胞相似性很高的群体区分力度不够，所以需要开发新的算法来解决这个聚类的问题。
+
+# SC聚类
+
+```{r,warning=F,message=F}
+pollen <- sc3_prepare(pollen, ks = 2:5)
+pollen <- sc3_estimate_k(pollen)
+pollen@sc3$k_estimation
+## 准备 SCESet对象 数据给 SC3方法，先预测能聚多少个类，发现恰好是11个。
+
+## 这里是并行计算，所以速度还可以
+pollen <- sc3(pollen, ks = 11, biology = TRUE)
+pollen
+head(fData(pollen))
+## 可以看到SC3方法处理后的SCESet对象的基因信息增加了5列，比较重要的是sc3_gene_filter信息，决定着该基因是否拿去聚类，因为基因太多了，需要挑选
+table(fData(pollen)$sc3_gene_filter)
+### 只有一半的基因被挑选去聚类了
+
+## 后面是一些可视化
+sc3_plot_consensus(pollen, k = 11, show_pdata = "cell_type1")
+sc3_plot_silhouette(pollen, k = 11)
+sc3_plot_expression(pollen, k = 11, show_pdata = "cell_type1")
+sc3_plot_markers(pollen, k = 11, show_pdata = "cell_type1")
+plotPCA(pollen, colour_by = "sc3_11_clusters")
+## 还支持shiny的交互式聚类，暂时不显示
+# sc3_interactive(pollen)
+```
+
+很明显可以看到SC3聚类的效果要好于普通的PCA
+
+# pcaReduce
+
+```{r}
+# use the same gene filter as in SC3
+input <- exprs(pollen[fData(pollen)$sc3_gene_filter, ])
+
+# run pcaReduce 1 time creating hierarchies from 1 to 30 clusters
+pca.red <- PCAreduce(t(input), nbt = 1, q = 30, method = 'S')[[1]]
+##  这里对2~30种类别的情况都分别对样本进行分组。
+
+## 我们这里取只有11组的时候，这些样本是如何分组的信息来可视化。
+pData(pollen)$pcaReduce <- as.character(pca.red[,32 - 11])
+plotPCA(pollen, colour_by = "pcaReduce")
+```
+
+# tSNE + kmeans
+
+scater包包装了 [Rtsne](https://cran.r-project.org/web/packages/Rtsne/index.html) 和 [ggplot2](https://cran.r-project.org/web/packages/ggplot2/index.html) 来做tSNE并且可视化。
+
+```{r}
+pollen <- plotTSNE(pollen, rand_seed = 1, return_SCESet = TRUE)
+## 上面的tSNE的结果，下面用kmeans的方法进行聚类，假定是8类细胞类型。
+pData(pollen)$tSNE_kmeans <- as.character(kmeans(pollen@reducedDimension, centers = 8)$clust)
+plotTSNE(pollen, rand_seed = 1, colour_by = "tSNE_kmeans")
+
+```
+
+# SNN-Cliq
+
+```{r,eval=F}
+distan <- "euclidean"
+par.k <- 3
+par.r <- 0.7
+par.m <- 0.5
+# construct a graph
+scRNA.seq.funcs::SNN(
+    data = t(input),
+    outfile = "snn-cliq.txt",
+    k = par.k,
+    distance = distan
+)
+# find clusters in the graph
+snn.res <- 
+    system(
+        paste0(
+            "python snn-cliq/Cliq.py ", 
+            "-i snn-cliq.txt ",
+            "-o res-snn-cliq.txt ",
+            "-r ", par.r,
+            " -m ", par.m
+        ),
+        intern = TRUE
+    )
+cat(paste(snn.res, collapse = "\n"))
+
+snn.res <- read.table("res-snn-cliq.txt")
+# remove files that were created during the analysis
+system("rm snn-cliq.txt res-snn-cliq.txt")
+
+pData(pollen)$SNNCliq <- as.character(snn.res[,1])
+plotPCA(pollen, colour_by = "SNNCliq")
+
+
+```
+
+# SINCERA
+
+```{r}
+# perform gene-by-gene per-sample z-score transformation
+dat <- apply(input, 1, function(y) scRNA.seq.funcs::z.transform.helper(y))
+# hierarchical clustering
+dd <- as.dist((1 - cor(t(dat), method = "pearson"))/2)
+hc <- hclust(dd, method = "average")
+
+num.singleton <- 0
+kk <- 1
+for (i in 2:dim(dat)[2]) {
+    clusters <- cutree(hc, k = i)
+    clustersizes <- as.data.frame(table(clusters))
+    singleton.clusters <- which(clustersizes$Freq < 2)
+    if (length(singleton.clusters) <= num.singleton) {
+        kk <- i
+    } else {
+        break;
+    }
+}
+cat(kk)
+pheatmap(
+    t(dat),
+    cluster_cols = hc,
+    cutree_cols = 14,
+    kmeans_k = 100,
+    show_rownames = FALSE
+)
+```
+
+#  SEURAT
+
+```{r,eval=F}
+library(Seurat)
+pollen_seurat <- new("seurat", raw.data = get_exprs(pollen, exprs_values = "tpm"))
+pollen_seurat <- Setup(pollen_seurat, project = "Pollen")
+pollen_seurat <- MeanVarPlot(pollen_seurat)
+pollen_seurat <- RegressOut(pollen_seurat, latent.vars = c("nUMI"), 
+                            genes.regress = pollen_seurat@var.genes)
+pollen_seurat <- PCAFast(pollen_seurat)
+pollen_seurat <- RunTSNE(pollen_seurat)
+pollen_seurat <- FindClusters(pollen_seurat)
+TSNEPlot(pollen_seurat, do.label = T)
+```
+
+
+```{r,eval=F}
+pData(pollen)$SEURAT <- as.character(pollen_seurat@ident)
+sc3_plot_expression(pollen, k = 11, show_pdata = "SEURAT")
+markers <- FindMarkers(pollen_seurat, 2)
+FeaturePlot(pollen_seurat, 
+            head(rownames(markers)), 
+            cols.use = c("lightgrey", "blue"), 
+            nCol = 3)
+```
+
+
+
+
+

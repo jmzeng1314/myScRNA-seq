@@ -2,7 +2,7 @@
 
 > 虽然会了那么多NGS组学分析，也一一写过全套教程了。但总躺在舒适区就不好了，还是得学点新东西哈。
 
-就从这个scRNA-seq开始吧。
+就从这个scRNA-seq开始吧，这里面有一个 **old** 文件夹，是因为这个**scater**包更新的步子迈得太大了，以至于我2017/11/1 之前的学习笔记全部作废！
 
 
 # scRNA-seq课程介绍
@@ -28,11 +28,107 @@ docker run -it quay.io/hemberg-group/scrna-seq-course:latest R
 ```
 等下载完成后，我们可以直接使用这个镜像来启动运行容器！
 
-因为亚马逊是国外的，所以下载非常快，如果是腾讯云阿里云可能需要好几个小时。毕竟是6个多G呀!
+因为亚马逊是国外的，所以下载非常快，如果是腾讯云阿里云可能需要好几个小时。毕竟是3个多G呀!
 
 这个docker镜像里面已经安装好了所有的软件环境和R包.
 
 如果想了解[更多docker命令，可以点击学习](http://www.runoob.com/docker/docker-image-usage.html)
+
+## 主要基于scater包
+
+最新的文档如下：
+
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-intro.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-intro.R) | An introduction to the scater package    |
+| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-dataviz.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-dataviz.R) | Data visualisation methods in scater     |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-quantimport.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-quantimport.R) | Expression quantification and import     |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-qc.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-qc.R) | Quality control with scater              |
+| [HTML](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-transition.html) | [R Script](http://bioconductor.org/packages/release/bioc/vignettes/scater/inst/doc/vignette-transition.R) | Transition from SCESet to SingleCellExperiment |
+| [PDF](http://bioconductor.org/packages/release/bioc/manuals/scater/man/scater.pdf) |                                          |                                          |
+
+而且其GitHub的教程也更新了：http://hemberg-lab.github.io/scRNA.seq.course/
+
+## 必须了解这个 `SingleCellExperiment` 对象
+
+创建该对象代码如下：
+
+```R
+suppressPackageStartupMessages(library(scater))
+data("sc_example_counts")
+data("sc_example_cell_info")
+
+## ----quickstart-make-sce, results='hide'-----------------------------------
+gene_df <- DataFrame(Gene = rownames(sc_example_counts))
+rownames(gene_df) <- gene_df$Gene
+example_sce <- SingleCellExperiment(assays = list(counts = sc_example_counts), 
+                                    colData = sc_example_cell_info, 
+                                    rowData = gene_df)
+
+example_sce <- normalise(example_sce)
+
+## ----quickstart-add-exprs, results='hide'----------------------------------
+exprs(example_sce) <- log2(
+    calculateCPM(example_sce, use.size.factors = FALSE) + 1)
+
+## ----filter-no-exprs-------------------------------------------------------
+keep_feature <- rowSums(exprs(example_sce) > 0) > 0
+example_sce <- example_sce[keep_feature,]
+
+example_sceset <- calculateQCMetrics(example_sce, feature_controls = list(eg = 1:40)) 
+ 
+
+colnames(colData(example_sceset))
+colnames(rowData(example_sceset))
+```
+
+首先是基于样本的过滤，用 `colData(object)` 可以查看各个样本统计情况 
+
+- `total_counts`: total number of counts for the cell (aka ‘library size’)
+
+- `log10_total_counts`: total_counts on the log10-scale
+
+- `total_features`: the number of features for the cell that have expression above the detection limit (default detection limit is zero)
+
+- `filter_on_total_counts`: would this cell be filtered out based on its log10-total_counts being (by default) more than 5 median absolute deviations from the median log10-total_counts for the dataset?
+
+- `filter_on_total_features`: would this cell be filtered out based on its total_features being (by default) more than 5 median absolute deviations from the median total_features for the dataset?
+
+- `counts_feature_controls`: total number of counts for the cell that come from (a set of user-defined) control features. Defaults to zero if no control features are indicated.
+
+- `counts_endogenous_features`: total number of counts for the cell that come from endogenous features (i.e. not control features). Defaults to `total_counts` if no control features are indicated.
+
+- `log10_counts_feature_controls`: total number of counts from control features on the log10-scale. Defaults to zero (i.e. log10(0 + 1), offset to avoid infinite values) if no control features are indicated.
+
+- `log10_counts_endogenous_features`: total number of counts from endogenous features on the log10-scale. Defaults to zero (i.e. log10(0 + 1), offset to avoid infinite values) if no control features are indicated.
+
+- `n_detected_feature_controls`: number of defined feature controls that have expression greater than the threshold defined in the object. *`pct_counts_feature_controls`: percentage of all counts that come from the defined control features. Defaults to zero if no control features are defined.
+
+
+然后是基于基因的过滤，用 `rowData(object)` 可以查看各个基因统计情况
+
+- `mean_exprs`: the mean expression level of the gene/feature.
+- `exprs_rank`: the rank of the feature’s expression level in the cell.
+- `total_feature_counts`: the total number of counts mapped to that feature across all cells.
+- `log10_total_feature_counts`: total feature counts on the log10-scale.
+- `pct_total_counts`: the percentage of all counts that are accounted for by the counts mapping to the feature.
+- `is_feature_control`: is the feature a control feature? Default is `FALSE` unless control features are defined by the user.
+- `n_cells_exprs`: the number of cells for which the expression level of the feature is above the detection limit (default detection limit is zero).
+
+所有的可视化都集中在了 `scater_gui` 这个函数产生的`shiny`网页里面：
+
+- `plotScater`: a plot method exists for `SingleCellExperiment` objects, which gives an overview of expression across cells.
+- `plotQC`: various methods are available for producing QC diagnostic plots.
+- `plotPCA`: produce a principal components plot for the cells.
+- `plotTSNE`: produce a t-distributed stochastic neighbour embedding (reduced dimension) plot for the cells.
+- `plotDiffusionMap`: produce a diffusion map (reduced dimension) plot for the cells.
+- `plotMDS`: produce a multi-dimensional scaling plot for the cells.
+- `plotReducedDim`: plot a reduced-dimension representation of the cells.
+- `plotExpression`: plot expression levels for a defined set of features.
+- `plotPlatePosition`: plot cells in their position on a plate, coloured by cell metadata and QC metrics or feature expression level.
+- `plotColData`: plot cell metadata and QC metrics.
+- `plotRowData`: plot feature metadata and QC metrics.
+
+可以充分的探索自己的数据，或者上面的每一个函数都可以对进行单独可视化，细致的探索自己的单细胞测序数据。
 
 # 数据集的介绍
 
@@ -82,594 +178,7 @@ After filtering, we maintained 564 high quality single cells (NA19098: 142, NA19
 - The quality control analyses were performed using all protein-coding genes (Ensembl GRCh37 release 82) with at least one observed read. 
 - Using the high quality single cells, we further removed genes with low expression levels for downstream analyses. We removed all genes with a mean log2 cpm less than 2
 - We also removed genes with molecule counts larger than 1,024 for the correction of collision probability. 
- 
+
 In the end we kept 13,058 endogenous genes and 48 ERCC spike-in genes.
 
 接下来我们就重现一下这个分析。
-
-# 构建表达矩阵
-
-> 可以选择STAR或者HISAT2，fastq格式的测序数据文件处理成bam格式的比对结果。
-
-- To assess read quality, we ran FastQC  and observed a decrease in base quality at the 3′ end of the reads. 
-- Thus we removed low quality bases from the 3′ end using sickle with default settings.
-- To handle the UMI sequences at the 5′ end of each read, we used umitools to find all reads with a UMI of the pattern NNNNNGGG (reads without UMIs were discarded). 
-- We then mapped reads to human genome hg19 (only including chromosomes 1–22, X, and Y, plus the ERCC sequences) with Subjunc , discarding non-uniquely mapped reads (option -u). 
-- To obtain gene-level counts, we assigned reads to protein-coding genes (Ensembl GRCh37 release 82) and the ERCC spike-in genes using featureCounts . 
-
-这里就得到了所有细胞的所有检测到的基因的表达量。上述流程里面包含了去除低质量reads，挑选标记着UMI的序列，subjunc工具来比对，featureCounts来做定量。
-
-### 流程的shell代码示例
-
-```
-$<path_to_STAR>/STAR --runThreadN 1 --runMode alignReads
---readFilesIn reads1.fq.gz reads2.fq.gz --readFilesCommand zcat --genomeDir <path>
---parametersFiles FileOfMoreParameters.txt --outFileNamePrefix <outpath>/output
-$<path_to_Salmon>/salmon quant -i salmon_transcript_index -1 reads1.fq.gz -2 reads2.fq.gz -p #threads -l A -g genome.gtf --seqBias --gcBias --posBias
-python <RSeQCpath>/geneBody_coverage.py -i input.bam -r genome.bed -o output.txt
-python <RSeQCpath>/bam_stat.py -i input.bam -r genome.bed -o output.txt
-python <RSeQCpath>/split_bam.py -i input.bam -r rRNAmask.bed -o output.txt
-# include multimapping
-<featureCounts_path>/featureCounts -O -M -Q 30 -p -a genome.gtf -o outputfile input.bam
-# exclude multimapping
-<featureCounts_path>/featureCounts -Q 30 -p -a genome.gtf -o outputfile input.bam
-
-```
-
-这个流程代码可以更加多元化，自动化，上面只是一个简单的例子而已。
-
-### 比对情况的简单QC
-
-![比对的百分比](https://hemberg-lab.github.io/scRNA.seq.course/figures/Bergiers_exp1_mapping_by_cell.png)
-
-还可以用[RSeQC](http://rseqc.sourceforge.net/)来查看转录组的各种比对情况：
-
-![基因主体的覆盖偏差](https://hemberg-lab.github.io/scRNA.seq.course/figures/Exp1_RSEQC_geneBodyCoverage_plot_Combined.png) 
-
-# 用scater包做QC
-
-## 首先了解测序数据得到的表达矩阵
-
-
-```r
-library(scater, quietly = TRUE)
-library(knitr)
-options(stringsAsFactors = FALSE)
-
-# 这个文件是表达矩阵，包括线粒体基因和 ERCC spike-ins 的表达量，可以用来做质控
-molecules <- read.table("tung/molecules.txt", sep = "\t")
-
-## 这个文件是表达矩阵涉及到的所有样本的描述信息，包括样本来源于哪个细胞，以及哪个批次。
-anno <- read.table("tung/annotation.txt", sep = "\t", header = TRUE)
-
-knitr::kable(
-    head(molecules[ , 1:3]), booktabs = TRUE,
-    caption = 'A table of the first 6 rows and 3 columns of the molecules table.'
-)
-```
-
-
-
-Table: A table of the first 6 rows and 3 columns of the molecules table.
-
-                   NA19098.r1.A01   NA19098.r1.A02   NA19098.r1.A03
-----------------  ---------------  ---------------  ---------------
-ENSG00000237683                 0                0                0
-ENSG00000187634                 0                0                0
-ENSG00000188976                 3                6                1
-ENSG00000187961                 0                0                0
-ENSG00000187583                 0                0                0
-ENSG00000187642                 0                0                0
-
-```r
-knitr::kable(
-    head(anno), booktabs = TRUE,
-    caption = 'A table of the first 6 rows of the anno table.'
-)
-```
-
-
-
-Table: A table of the first 6 rows of the anno table.
-
-individual   replicate   well   batch        sample_id      
------------  ----------  -----  -----------  ---------------
-NA19098      r1          A01    NA19098.r1   NA19098.r1.A01 
-NA19098      r1          A02    NA19098.r1   NA19098.r1.A02 
-NA19098      r1          A03    NA19098.r1   NA19098.r1.A03 
-NA19098      r1          A04    NA19098.r1   NA19098.r1.A04 
-NA19098      r1          A05    NA19098.r1   NA19098.r1.A05 
-NA19098      r1          A06    NA19098.r1   NA19098.r1.A06 
-
-## 表达矩阵导入scater包做质控
-
-
-```r
-#First, create the scater SCESet classes:
-
-pheno_data <- new("AnnotatedDataFrame", anno)
-rownames(pheno_data) <- pheno_data$sample_id
-dat <- scater::newSCESet(
-    countData = molecules,
-    phenoData = pheno_data
-)
-
-# 这个对象非常重要， pData(dat) 和  fData(dat) 分别记录了 表达矩阵的样本信息和基因信息。
-
-#Remove genes that are not expressed in any cell:
-
-keep_feature <- rowSums(counts(dat) > 0) > 0
-dat <- dat[keep_feature, ]
-
-## 这里得到dat是一个SCESet对象
-
-#Define control features (genes) - ERCC spike-ins and mitochondrial genes (provided by the authors):
-## 线粒体基因和 ERCC spike-ins 都需要拿出来作为质控的指引。
-## 这里可以找到89个ERCC spike-ins 序列
-ercc <- featureNames(dat)[grepl("ERCC-", featureNames(dat))] 
-## 线粒体基因序列，可以从GTF等注释文件提取
-mt <- c("ENSG00000198899", "ENSG00000198727", "ENSG00000198888",
-        "ENSG00000198886", "ENSG00000212907", "ENSG00000198786",
-        "ENSG00000198695", "ENSG00000198712", "ENSG00000198804",
-        "ENSG00000198763", "ENSG00000228253", "ENSG00000198938",
-        "ENSG00000198840")
-
-
-#Calculate the quality metrics:
-
-dat_qc <- scater::calculateQCMetrics(
-    dat,
-    feature_controls = list(ERCC = ercc, MT = mt)
-)
-## 这里dat_qc非常重要，后续的分析都是基于此，还是看pData(dat_qc) 和  fData(dat_qc) 
-dat_qc
-```
-
-```
-## SCESet (storageMode: lockedEnvironment)
-## assayData: 18726 features, 864 samples 
-##   element names: counts, exprs 
-## protocolData: none
-## phenoData
-##   rowNames: NA19098.r1.A01 NA19098.r1.A02 ... NA19239.r3.H12 (864
-##     total)
-##   varLabels: individual replicate ... is_cell_control (52 total)
-##   varMetadata: labelDescription
-## featureData
-##   featureNames: ENSG00000237683 ENSG00000187634 ... ERCC-00171
-##     (18726 total)
-##   fvarLabels: mean_exprs exprs_rank ... is_feature_control (12
-##     total)
-##   fvarMetadata: labelDescription
-## experimentData: use 'experimentData(object)'
-## Annotation:
-```
-
-## 基于样本的过滤
-
-### 基于文库大小和测到的基因数量来质控
-
-
-```r
-## 首先看每个样本的总reads数量
-hist(
-    dat_qc$total_counts,
-    breaks = 100
-)
-abline(v = 25000, col = "red")
-```
-
-![](readme_files/figure-html/unnamed-chunk-2-1.png)<!-- -->
-
-```r
-## 然后看每个样本测到的基因数量
-hist(
-    dat_qc$total_features,
-    breaks = 100
-)
-abline(v = 7000, col = "red")
-```
-
-![](readme_files/figure-html/unnamed-chunk-2-2.png)<!-- -->
-画红线的左边的样本可能不合格，上面的threshold可能过于武断。
-
-### 线粒体基因和 ERCC spike-ins 序列占比问题
-
-单细胞测序想探究的是细胞里面基因的表达量，如果外源的ERCC spike-ins 序列占比过多，这样的数据也得抛弃，可能是细胞生存状态不佳，或者实验过程中的RNA降解等原因。
-
-下面的两个QC图也是scater包的特色
-
-
-```r
-scater::plotPhenoData(
-    dat_qc,
-    aes_string(x = "total_features",
-               y = "pct_counts_feature_controls_MT",
-               colour = "batch")
-)
-```
-
-![](readme_files/figure-html/unnamed-chunk-3-1.png)<!-- -->
-
-```r
-## 可以看到少量样本的线粒体序列占比超过了10%,可以考虑去除掉这些样本。
-
-scater::plotPhenoData(
-    dat_qc,
-    aes_string(x = "total_features",
-               y = "pct_counts_feature_controls_ERCC",
-               colour = "batch")
-)
-```
-
-![](readme_files/figure-html/unnamed-chunk-3-2.png)<!-- -->
-
-```r
-## 可以看到整个 NA19098.r2都是有问题的，外源的ERCC spike-ins含量太高了。可以考虑去除整个batch
-```
-
-### 选定过滤标准
-
-```r
-filter_by_expr_features <- dat_qc$total_counts >25000 
-table(filter_by_expr_features)  
-```
-
-```
-## filter_by_expr_features
-## FALSE  TRUE 
-##    46   818
-```
-
-```r
-filter_by_total_counts  <- dat_qc$total_features >7000
-table(filter_by_total_counts) 
-```
-
-```
-## filter_by_total_counts
-## FALSE  TRUE 
-##   120   744
-```
-
-```r
-filter_by_ERCC   <- dat_qc$pct_counts_feature_controls_ERCC < 5
-## 这里我没有根据作者那样选择去除整个NA19098.r2批次的样本
-# filter_by_ERCC <- reads$batch != "NA19098.r2" & reads$pct_counts_feature_controls_ERCC < 25
-table(filter_by_ERCC)
-```
-
-```
-## filter_by_ERCC
-## FALSE  TRUE 
-##   102   762
-```
-
-```r
-filter_by_MT<- dat_qc$pct_counts_feature_controls_MT < 10
-table(filter_by_MT)  
-```
-
-```
-## filter_by_MT
-## FALSE  TRUE 
-##    31   833
-```
-
-### 得到最后的高质量单细胞测序数据
-
-
-```r
-dat_qc$use <- (
-  # sufficient features (genes)
-  filter_by_expr_features &
-    # sufficient molecules counted
-    filter_by_total_counts &
-    # sufficient endogenous RNA
-    filter_by_ERCC &
-    # remove cells with unusual number of reads in MT genes
-    filter_by_MT
-)
-knitr::kable(
-  as.data.frame(table(dat_qc$use)),
-  booktabs = TRUE,
-  row.names = FALSE,
-  caption = 'The number of cells removed by manual filter (FALSE)'
-)
-```
-
-
-
-Table: The number of cells removed by manual filter (FALSE)
-
-Var1     Freq
-------  -----
-FALSE     207
-TRUE      657
-
-这4个标准合起来过滤掉了207个样本，最后剩下657个高质量测序数据。
-
-### scater一站式过滤低质量样本
-
-> scater包自己提供了一个基于PCA的QC标准，不需要自己根据文库大小，覆盖的基因数量，外源的ERCC spike-ins 含量以及线粒体DNA含量来进行人工过滤。
-
-默认的标准如下：
-
-- pct_counts_top100features
-- total_features
-- pct_counts_feature_controls
-- n_detected_feature_controls
-- log10_counts_endogenous_features
-- log10_counts_feature_controls
-
-一站式QC函数如下：
-
-
-```r
-dat_pca <- scater::plotPCA(dat_qc,
-                  size_by = "total_features", 
-                  shape_by = "use",
-                  pca_data_input = "pdata",
-                  detect_outliers = TRUE,
-                  return_SCESet = TRUE)
-```
-
-```
-## sROC 0.1-2 loaded
-```
-
-```
-## The following cells/samples are detected as outliers:
-## NA19098.r2.A01
-## NA19098.r2.A02
-## NA19098.r2.A06
-## NA19098.r2.A09
-## NA19098.r2.A10
-## NA19098.r2.A12
-## NA19098.r2.B01
-## NA19098.r2.B03
-## NA19098.r2.B04
-## NA19098.r2.B05
-## NA19098.r2.B07
-## NA19098.r2.B11
-## NA19098.r2.B12
-## NA19098.r2.C01
-## NA19098.r2.C02
-## NA19098.r2.C03
-## NA19098.r2.C04
-## NA19098.r2.C05
-## NA19098.r2.C06
-## NA19098.r2.C07
-## NA19098.r2.C08
-## NA19098.r2.C09
-## NA19098.r2.C10
-## NA19098.r2.C11
-## NA19098.r2.C12
-## NA19098.r2.D01
-## NA19098.r2.D02
-## NA19098.r2.D03
-## NA19098.r2.D04
-## NA19098.r2.D07
-## NA19098.r2.D08
-## NA19098.r2.D09
-## NA19098.r2.D10
-## NA19098.r2.D12
-## NA19098.r2.E01
-## NA19098.r2.E02
-## NA19098.r2.E03
-## NA19098.r2.E04
-## NA19098.r2.E05
-## NA19098.r2.E06
-## NA19098.r2.E07
-## NA19098.r2.E12
-## NA19098.r2.F01
-## NA19098.r2.F02
-## NA19098.r2.F07
-## NA19098.r2.F08
-## NA19098.r2.F09
-## NA19098.r2.F10
-## NA19098.r2.F11
-## NA19098.r2.F12
-## NA19098.r2.G01
-## NA19098.r2.G02
-## NA19098.r2.G03
-## NA19098.r2.G05
-## NA19098.r2.G06
-## NA19098.r2.G08
-## NA19098.r2.G09
-## NA19098.r2.G10
-## NA19098.r2.G11
-## NA19098.r2.H01
-## NA19098.r2.H02
-## NA19098.r2.H03
-## NA19098.r2.H04
-## NA19098.r2.H05
-## NA19098.r2.H06
-## NA19098.r2.H07
-## NA19098.r2.H08
-## NA19098.r2.H10
-## NA19098.r2.H12
-## NA19101.r3.A02
-## NA19101.r3.C12
-## NA19101.r3.D01
-## NA19101.r3.E08
-## Variables with highest loadings for PC1 and PC2:
-## 
-##                                            PC1         PC2
-## ---------------------------------  -----------  ----------
-## pct_counts_top_100_features          0.4771343   0.3009332
-## pct_counts_feature_controls          0.4735839   0.3309562
-## n_detected_feature_controls          0.1332811   0.5367629
-## log10_counts_feature_controls       -0.1427373   0.5911762
-## total_features                      -0.5016681   0.2936705
-## log10_counts_endogenous_features    -0.5081855   0.2757918
-```
-
-![](readme_files/figure-html/unnamed-chunk-6-1.png)<!-- -->
-
-```r
-knitr::kable(
-  as.data.frame(table(dat_pca$outlier)),
-  booktabs = TRUE,
-  row.names = FALSE,
-  caption = 'The number of cells removed by automatic filter (FALSE)'
-)
-```
-
-
-
-Table: The number of cells removed by automatic filter (FALSE)
-
-Var1     Freq
-------  -----
-FALSE     791
-TRUE       73
-
-## 基于基因的过滤
-
-主要是看看表达量很高的那些基因是什么情况
-
-
-```r
-scater::plotQC(dat_qc, type = "highest-expression")
-```
-
-![](readme_files/figure-html/unnamed-chunk-7-1.png)<!-- -->
-
-如图所示，表达排名前50个基因中有15个是外源的ERCC spike-ins，如果下次再做实验，可以考虑把外源的ERCC spike-ins稀释一下。
-
-### 根据基因表达量来过滤
-
-这个过滤的threshold取决于测序深度，需要仔细权衡。基于UMI技术的，标准可以是至少有两个细胞检测到了该基因的至少一个转录本。如果是基于reads的，那么至少有两个以上细胞检测到了该基因的至少5个reads。值得注意的是，要先过滤细胞，再过滤基因。
-
-
-```r
-filter_genes <- apply(counts(dat_qc[ , pData(dat_qc)$use]), 1, 
-                      function(x) length(x[x > 1]) >= 2)
-fData(dat_qc)$use <- filter_genes
-knitr::kable(
-  as.data.frame(table(filter_genes)),
-  booktabs = TRUE,
-  row.names = FALSE,
-  caption = 'The number of genes removed by gene filter (FALSE)'
-)
-```
-
-
-
-Table: The number of genes removed by gene filter (FALSE)
-
-filter_genes     Freq
--------------  ------
-FALSE            4660
-TRUE            14066
-
-有4660个基因不合格，被剔除掉了。
-
-## 最终留下来的数据是
-
-
-```r
-dim(dat_qc[fData(dat_qc)$use, pData(dat_qc)$use])
-```
-
-```
-## Features  Samples 
-##    14066      657
-```
-
-657个样本的14066个基因的表达量。
-
-PS:注意一下，上面的过滤基于的是UMI方法算出的表达矩阵，如果是纯粹的reads表达矩阵，结果会略微有一点不同。
-the ERCC and MT filters are more strict for the reads-based analysis.
-
-# 数据可视化-聚类
-
-首先把reads  counts矩阵进行对数转换，如下：
-
-
-```r
-set_exprs(dat_qc, "log2_counts") <- log2(counts(dat_qc) + 1)
-library(scater, quietly = TRUE)
-options(stringsAsFactors = FALSE) 
-dat_filter <-dat_qc[fData(dat_qc)$use, pData(dat_qc)$use]
-endog_genes <- !fData(dat_filter)$is_feature_control
-```
-
-这里dat_qc是质控前的数据集，dat_filter是质控后的数据集，一般来说，我们做可视化只需要考虑细胞自身的基因表达量即可
-
-
-### PCA
-基于原始reads counts矩阵和对数化矩阵分开可视化
-
-```r
-scater::plotPCA(dat_qc[endog_genes, ],
-                ntop = 500,
-                colour_by = "batch",
-                size_by = "total_features",
-                shape_by = "individual",
-                exprs_values = "counts")
-```
-
-![](readme_files/figure-html/unnamed-chunk-11-1.png)<!-- -->
-
-```r
-scater::plotPCA(dat_qc[endog_genes, ],
-                ntop = 500,
-                colour_by = "batch",
-                size_by = "total_features",
-                shape_by = "individual",
-                exprs_values = "log2_counts")
-```
-
-![](readme_files/figure-html/unnamed-chunk-11-2.png)<!-- -->
-
-```r
-## 去除低质量细胞，和信号微弱的基因之后。
-scater::plotPCA(dat_filter[endog_genes, ],
-                ntop = 500,
-                colour_by = "batch",
-                size_by = "total_features",
-                shape_by = "individual",
-                exprs_values = "log2_counts")
-```
-
-![](readme_files/figure-html/unnamed-chunk-11-3.png)<!-- -->
-很明显对数转换后的数据更适合把不同批次不同来源的细胞分开。它降低了第一主成分的可解释度，而且使得表达值的分布更趋近于正态性。但是仅仅是对数转换不足以去除细胞之间的测序技术误差，比如测序深度等等。真正的下游分析可以选择CPM的归一化方法。
-
-### t-SNE
-
-从算法的角度来说， tSNE (t-Distributed Stochastic Neighbor Embedding) combines dimensionality reduction (e.g. PCA) with random walks on the nearest-neighbour network  是优于PCA的。
-
-
-```r
-scater::plotTSNE(dat_qc[endog_genes, ],
-                 ntop = 500,
-                 perplexity = 130,
-                 colour_by = "batch",
-                 size_by = "total_features",
-                 shape_by = "individual",
-                 exprs_values = "log2_counts",
-                 rand_seed = 123456)
-```
-
-![](readme_files/figure-html/unnamed-chunk-12-1.png)<!-- -->
-
-```r
-scater::plotTSNE(dat_filter[endog_genes, ],
-                 ntop = 500,
-                 perplexity = 130,
-                 colour_by = "batch",
-                 size_by = "total_features",
-                 shape_by = "individual",
-                 exprs_values = "log2_counts",
-                 rand_seed = 123456)
-```
-
-![](readme_files/figure-html/unnamed-chunk-12-2.png)<!-- -->
-
-# 剔除可能的 confounders, artifacts and biases
-
-
-
-
