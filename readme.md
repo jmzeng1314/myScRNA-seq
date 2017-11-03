@@ -20,7 +20,7 @@
 
 如果是在自己的电脑里面就直接打开R，然后一个个包的安装吧，我把代码简单整理了一下,直接点击[installed_required_packages.R](installed_required_packages.R)
 
-其实最方便的是用docker技术。
+其实最方便的是用docker技术，因为需要安装的包实在是太多了。
 首先在自己的亚马逊云上面把他们的课程docker镜像下载下来，并且使用该镜像来创建一个容器。
 命令如下：
 ```
@@ -200,4 +200,59 @@ todo
 #### step4: normalization方法大比拼
 
 todo
+
+#### step5:cluster方法大比拼
+
+```
+library(pcaMethods)
+library(pcaReduce)
+library(SC3)
+library(scater)
+library(SingleCellExperiment)
+library(pheatmap)
+library(mclust)
+set.seed(1234567)
+```
+
+
+
+#### step6: feature selection 方法大比拼
+
+```
+library(scRNA.seq.funcs)
+library(matrixStats)
+library(M3Drop)
+library(RColorBrewer)
+library(SingleCellExperiment)
+set.seed(1)
+```
+
+
+
+#### step7:差异分析方法大比拼
+
+todo
+
+#### step8: Pseudotime analysis
+
+```R
+library(SingleCellExperiment)
+library(TSCAN)
+library(M3Drop)
+library(monocle)
+library(destiny)
+library(SLICER)
+set.seed(1)
+```
+
+#### step9:Imputation
+
+```R
+library(scImpute)
+library(SC3)
+library(scater)
+library(SingleCellExperiment)
+library(mclust)
+set.seed(1234567)
+```
 
