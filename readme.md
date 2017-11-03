@@ -182,3 +182,18 @@ After filtering, we maintained 564 high quality single cells (NA19098: 142, NA19
 In the end we kept 13,058 endogenous genes and 48 ERCC spike-in genes.
 
 接下来我们就重现一下这个分析。
+
+
+
+#### step1 : 读取表达矩阵
+
+todo
+
+#### step2: 样本和基因分别过滤
+
+todo
+
+#### step3：表达矩阵的可视化
+
+todo
+
